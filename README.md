@@ -10,7 +10,9 @@ You can install it on Debian/Ubuntu/Mint-based systems using:
 ```bash
 sudo apt update
 sudo apt install qemu-utils
+```
 
 ```bash
 chmod +x Nagranie
 sudo ./Nagranie
+```
