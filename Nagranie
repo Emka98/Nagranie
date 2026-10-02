@@ -1,0 +1,197 @@
+#!/bin/bash
+
+# Set colors
+RED='\e[91m'
+YEL='\e[93m'
+GRE='\e[92m'
+NC='\e[0m'
+
+# Warning sudo check
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}"
+  cat << "EOF"
+#####################################################################################
+#                                      UWAGA!                                       #
+#                                                                                   #
+#                           Skrypt wymaga uprawnień roota                           #
+#               Uruchamiam ponownie z uprawnieniami administratora...               #
+#                                                                                   #
+#####################################################################################
+EOF
+  echo -e "${NC}"
+  echo ""
+  exec sudo "$0" "$@"
+fi
+
+# Description of how it works
+echo -e "${YEL}"
+cat << "EOF"
+#####################################################################################
+#                                 Opis działania:                                   #
+#                                                                                   #
+#     Program wylistuje podłączone dyski USB oraz dystrybucje qcow mieszczące się   #
+#      w katalogu, gdzie został uruchomiony. Do poprawnego działania potrzebuje     #
+#      pakietu qemu-utils, ponieważ następnie podstawia te dane pod komendę:        #
+#                                                                                   #
+#        sudo qemu-img convert -p wybranyplik -O raw dyskdonagrania && sync         #
+#####################################################################################
+EOF
+echo -e "${NC}"
+echo ""
+
+# Check for USB devices
+mapfile -t usb_devices < <(lsblk -d -o NAME,SIZE,MODEL,TRAN | grep usb)
+while [ ${#usb_devices[@]} -eq 0 ]; do
+  echo -e "${RED}"
+  cat << "EOF"
+#####################################################################################
+#                                      UWAGA!                                       #
+#                                                                                   #
+#                           Brak podłączonych urządzeń USB                          #
+#                                                                                   #
+#              Podłącz urządzenie USB i wciśnij [ENTER], aby spróbować ponownie     #
+#              Lub wpisz [q] i wciśnij [ENTER], aby zakończyć działanie.            #
+#                                                                                   #
+#####################################################################################
+EOF
+  echo -e "${NC}"
+  
+  read -r -p "Twój wybór: " wybor
+
+  if [[ "$wybor" =~ ^[Qq]$ ]]; then
+    exit 0
+  fi
+
+  mapfile -t usb_devices < <(lsblk -d -o NAME,SIZE,MODEL,TRAN | grep usb)
+done
+
+# List of devices
+echo -e "${GRE}Wybierz jedno z podłączonych urządzeń:${NC}"
+i=1
+declare -a devices_name
+declare -a devices_info
+
+for dev in "${usb_devices[@]}"; do
+    dev_name=$(echo "$dev" | awk '{print $1}')
+    size=$(echo "$dev" | awk '{print $2}')
+    model=$(echo "$dev" | awk '{for(j=3; j<=NF-1; j++) printf $j " "; print $(NF-1)}')
+    
+    if [ -z "$model" ]; then
+        model="Urządzenie USB"
+    fi
+
+    devices_name[$i]="$dev_name"
+    devices_info[$i]="$model ($size)"
+    echo "$i) ${devices_info[$i]}"
+    ((i++))
+done
+
+while true; do
+    echo ""
+    read -r -p "Wybierz numer urządzenia (lub wpisz 'q' aby wyjść): " wybor
+    
+    if [[ "$wybor" =~ ^[Qq]$ ]]; then
+        echo "Przerywam działanie skryptu."
+        exit 0
+    fi
+
+    if [[ "$wybor" =~ ^[0-9]+$ ]] && [ "$wybor" -ge 1 ] && [ "$wybor" -lt "$i" ]; then
+        selected_dev_name="${devices_name[$wybor]}"
+        selected_dev_info="${devices_info[$wybor]}"
+        break
+    else
+        echo -e "${RED}[!] Nieprawidłowy wybór. Wpisz poprawny numer z listy lub 'q'.${NC}"
+    fi
+done
+
+
+
+
+# Chose qcow2
+echo -e "${GRE}Wybierz plik qcow2 do konwersji:${NC}"
+mapfile -t qcow2_files < <(find . -maxdepth 1 -name "*.qcow2" -type f)
+
+if [ ${#qcow2_files[@]} -eq 0 ]; then
+    echo -e "${RED}[!] Brak plików .qcow2 w bieżącym katalogu.${NC}"
+    exit 0
+fi
+
+j=1
+declare -a files_info
+for file in "${qcow2_files[@]}"; do
+    clean_name="${file#./}"
+    files_info[$j]="$clean_name"
+    echo "$j) ${files_info[$j]}"
+    ((j++))
+done
+
+while true; do
+    echo ""
+    read -r -p "Wybierz numer pliku .qcow2 (lub wpisz 'q', aby wyjść): " file_choice
+    
+    if [[ "$file_choice" =~ ^[Qq]$ ]]; then
+        echo "Przerywam działanie skryptu."
+        exit 0
+    fi
+
+    if [[ "$file_choice" =~ ^[0-9]+$ ]] && [ "$file_choice" -ge 1 ] && [ "$file_choice" -lt "$j" ]; then
+        selected_file="${files_info[$file_choice]}"
+        break
+    else
+        echo -e "${RED}[!] Nieprawidłowy wybór. Wpisz poprawny numer z listy lub 'q'.${NC}"
+    fi
+done
+
+while true; do
+  echo -e "${RED}"
+  cat << EOF
+#####################################################################################################################################
+#                                                            UWAGA!                                                                 #
+#                                                                                                                                   #
+#                   Operacja ta nadpisze całą zawartość urządzenia $selected_dev_info danymi z pliku $selected_file!                #
+#                                                 Czy na pewno chcesz kontynuować?                                                  #
+#                                                                                                                                   #
+#####################################################################################################################################
+EOF
+  echo -e "${NC}"
+  
+  read -r -p "Wpisz 'tak' lub 't' aby kontynuować lub 'nie'/'n' aby anulować: " confirm
+  
+  # Zamiana wpisanego tekstu na małe litery dla wygody użytkownika
+  confirm=$(echo "$confirm" | tr '[:upper:]' '[:lower:]')
+
+  if [[ "$confirm" == "tak" || "$confirm" == "t" ]]; then
+      break
+  elif [[ "$confirm" == "nie" || "$confirm" == "n" ]]; then
+      echo "Anulowano operację."
+      exit 0
+  else
+      echo -e "${RED}[!] Nieprawidłowy wybór. Wpisz 'tak'/'t', 'nie' lub 'q'.${NC}\n"
+  fi
+done
+
+# Run progres
+cat << EOF
+#####################################################################################
+#                                URUCHAMIANIE KONWERSJI                             #
+#                                                                                   #
+#   Komenda do wykonania:                                                           #
+#   sudo qemu-img convert -p "$selected_file" -O raw /dev/$selected_dev_name && sync  #
+#                                                                                   #
+#####################################################################################
+EOF
+echo -e "${NC}"
+echo ""
+
+sudo qemu-img convert -p "$selected_file" -O raw "/dev/$selected_dev_name" && sync
+
+echo -e "${GRE}"
+cat << "EOF"
+#####################################################################################
+#                                ZAKOŃCZONO POMYŚLNIE!                              #
+#                                                                                   #
+#                 Operacja nagrywania obrazu na urządzenie dobiegła końca.            #
+#                                                                                   #
+#####################################################################################
+EOF
+echo -e "${NC}"
